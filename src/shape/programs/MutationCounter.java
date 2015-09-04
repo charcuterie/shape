@@ -38,17 +38,19 @@ class MutationCounterTest {
 		p.addIntArg("-t", "Coverage threshold. Positions with a number of reads less than this " +
 				"number are not reported. Defaults to 1, i.e., excludes positions with no " +
 				"coverage.", false, 1);
+		p.addBooleanArg("--collapse", "Collapse multiple deletions in a row to a single deletion at the 5' end.", false, false);
 		p.parse(args);
 		
 		String inputFile = p.getStringArg("-i");
 		String outputDir = p.getStringArg("-o");
 		int excludedBasesFromEnd = p.getIntArg("-n");
 		int coverageThreshold = p.getIntArg("-t");
+		boolean collapseDeletions = p.getBooleanArg("--collapse");
 		
 		AnnotationCollection<? extends MappedFragment> bam = BAMFragmentCollectionFactory.createFromBam(inputFile);
 
 		MutationProfileCollection mutationProfiles = new MutationProfileCollection(bam, coverageThreshold);
-		MutationCounter mutationCounter = new MutationCounter(excludedBasesFromEnd);
+		MutationCounter mutationCounter = new MutationCounter(excludedBasesFromEnd, collapseDeletions);
 		new MutationCounter(excludedBasesFromEnd);
 		mutationCounter.parseReads(bam, mutationProfiles);
 		mutationProfiles.toFile(outputDir + bam.toString());
@@ -58,12 +60,23 @@ class MutationCounterTest {
 	
 	static protected class MutationCounter extends BamProcessor<MutationProfileCollection> {
 
+		private boolean collapseDeletions;
+		
 		protected MutationCounter() {
-			super();
+			this(0);
 		}
 
 		protected MutationCounter(int n) {
 			super(n);
+		}
+		
+		protected MutationCounter(boolean collapseDeletions) {
+			this(0, collapseDeletions);
+		}
+		
+		protected MutationCounter(int n, boolean collapseDeletions) {
+			super(n);
+			this.collapseDeletions = collapseDeletions;
 		}
 		
 		/**
@@ -75,7 +88,7 @@ class MutationCounterTest {
 		 * @throws IOException if any reads do not have an MD tag
 		 * @throws IOException if any reads do not have a CIGAR string
 		 */
-		protected final void parseRead(SAMFragment read, MutationProfileCollection mutationProfiles, Set<Integer> visitedPositions) throws IOException {
+		protected final void parseRead(SAMFragment read, MutationProfileCollection mutationProfiles, Set<Integer> visitedPositions, boolean collapseDeletions) throws IOException {
 			String referenceName = read.getReferenceName();
 			int referencePosition = read.getReferenceStartPosition();
 			int referenceEndPosition = read.getReferenceEndPosition();
@@ -102,6 +115,7 @@ class MutationCounterTest {
 			
 			CigarOperator currentCigarOperator = null;
 			MdTagOperator currentMdTagOperator = null;
+			boolean hasDeletionImmediatelyBefore = false;
 			
 			while (cigarStack.hasElements()) {
 				currentCigarOperator = cigarStack.popOperator();
@@ -126,17 +140,25 @@ class MutationCounterTest {
 						// Unknown operators likely correspond to 'N's in the MD tag. 
 						// Count them as matches.
 						mutationProfiles.addMatch(referenceName, referencePosition, orientation);
+						hasDeletionImmediatelyBefore = false;
 						break;
 					case SOFT_CLIP:
 						// Ignore soft-clipped positions.
+						hasDeletionImmediatelyBefore = false;
 						break;
 					case DELETION:
 					case DELETION_OF_A:
 					case DELETION_OF_C:
 					case DELETION_OF_G:
 					case DELETION_OF_T:
-						mutationProfiles.addDeletion(referenceName, referencePosition, 
-								orientation);
+						if (hasDeletionImmediatelyBefore) {
+							mutationProfiles.addMatch(referenceName, referencePosition, orientation);
+						} else {
+							mutationProfiles.addDeletion(referenceName, referencePosition, orientation);
+						}
+						if (collapseDeletions) {
+							hasDeletionImmediatelyBefore = true;
+						}
 						break;
 					case UNKNOWN_MISMATCH:
 					case A_TO_N:
@@ -152,43 +174,18 @@ class MutationCounterTest {
 							mutationProfiles.addMutation(referenceName,
 									Nucleotide.valueOf(readBase), referencePosition, orientation);
 						}
+						hasDeletionImmediatelyBefore = false;
 						break;
 					case INSERTION:
 						mutationProfiles.addInsertion(referenceName, referencePosition, orientation);
+						hasDeletionImmediatelyBefore = false;
 						break;
 					default:
 						throw new IOException("Operator " + op.toString() + " encountered when" + 
 								" parsing mutations in read " + read.getName() + ". Don't know" +
 								"what to do with it.");
 					}
-					/*
-					// Unknown operators likely correspond to 'N's in the MD tag. Count them as matches.
-					if (op.equals(GenericOperator.MATCH) || op.equals(GenericOperator.UNKNOWN)) {
-						mutationProfiles.addMatch(referenceName, referencePosition, orientation);
 
-					// Do nothing with soft-clipped positions.
-					} else if (op.equals(GenericOperator.SOFT_CLIP)) {
-						
-					} else if (op.isDeletion()) {
-						mutationProfiles.addDeletion(referenceName, referencePosition, orientation);
-
-					} else if (op.isMutation()) {
-						// Get the base that we've mutated to.
-						String readBase = ((SAMFragment)read).getSamRecord().getReadString().substring(readPosition, 
-								readPosition + 1);
-						
-						// Ignoring uncertain bases in reads for now. Only recognizing 'A', 'C', 'G', 'T'.
-						if (readBase.charAt(0) != 'N') {
-							mutationProfiles.addMutation(referenceName, Nucleotide.valueOf(readBase), referencePosition, orientation);
-						}
-
-					} else if (op.equals(GenericOperator.INSERTION)) {
-						mutationProfiles.addInsertion(referenceName, referencePosition, orientation);
-
-					} else {
-						throw new IOException("Operator " + op.toString() + " encountered when parsing mutations in read " + read.getName() + ". Don't know what to do with it.");
-					}
-					*/
 					// Soft-clipping of a read may overlap with meaningful bases from its pair, so we haven't visited these soft-clipped positions. 
 					if (!currentCigarOperator.equals(CigarOperator.SOFT_CLIP)) {
 						visitedPositions.add(referencePosition);
@@ -202,6 +199,10 @@ class MutationCounterTest {
 					readPosition += 1;
 				}
 			}
+		}
+		
+		protected final void parseRead(SAMFragment read, MutationProfileCollection mutationProfiles, Set<Integer> visitedPositions) throws IOException {
+			parseRead(read, mutationProfiles, visitedPositions, collapseDeletions);
 		}
 
 		/**

@@ -24,7 +24,7 @@ public abstract class BamProcessor<T extends ChromosomeProfileCollection<? exten
 	protected int numExcludedBasesFromEnd;
 
 	protected BamProcessor() {
-		numExcludedBasesFromEnd = 0;
+		this(0);
 	}
 
 	protected BamProcessor(int n) {
