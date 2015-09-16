@@ -87,8 +87,10 @@ public abstract class BamProcessor<T extends ChromosomeProfileCollection<? exten
 			return detectMutationAtCigarOpD(m);
 		case 'S':
 			return GenericOperator.SOFT_CLIP;
+		case 'N':
+			return GenericOperator.SPLICE_JUNCTION;
 		default:
-			throw new IOException("Unknown CIGAR operator encountered. (Only recognizes M, I, S, and D.)");
+			throw new IOException("Unknown CIGAR operator " + c + " encountered. (Only recognizes M, I, S, D, and N.)");
 		}
 	}
 	

@@ -36,6 +36,7 @@ public enum GenericOperator {
     /** Other operators */
     UNKNOWN(false, true, true, "N"),
     SOFT_CLIP(false, true, true, "S"),
+    SPLICE_JUNCTION(false, false, true, "J")
     ;
 
     private final boolean isMutation;
